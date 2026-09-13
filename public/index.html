@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#080b0a" />
+  <title>DES · Roblox Avatar 3D</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <section class="panel">
+      <div class="brand">DES</div>
+      <h1>Roblox Avatar 3D</h1>
+      <p class="subtitle">Digite o username para carregar o boneco real do Roblox com corpo, roupa, skin e acessórios atuais.</p>
+
+      <form id="avatar-form" class="search-row">
+        <label class="input-wrap">
+          <span>@</span>
+          <input id="username" name="username" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="username" maxlength="20" required />
+        </label>
+        <button type="submit" id="load-button">Carregar</button>
+      </form>
+
+      <div id="status" class="status" aria-live="polite">Pronto para carregar um avatar.</div>
+
+      <div class="user-card" id="user-card" hidden>
+        <img id="preview" alt="Avatar Roblox" />
+        <div>
+          <strong id="display-name"></strong>
+          <span id="account-name"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="viewer-wrap">
+      <canvas id="viewer"></canvas>
+      <div class="viewer-hint">Arraste para girar · Pinça/scroll para zoom</div>
+      <div class="loader" id="loader" hidden>
+        <div class="spinner"></div>
+        <span>Montando avatar 3D…</span>
+      </div>
+    </section>
+  </main>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
