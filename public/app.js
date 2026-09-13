@@ -97,10 +97,6 @@ function patchMaterialTextures(materials) {
     texture.needsUpdate = true;
   };
 
-  for (const material of Object.values(materials.materialsInfo || {})) {
-    void material;
-  }
-
   const originalCreate = materials.create.bind(materials);
   materials.create = (name) => {
     const material = originalCreate(name);
@@ -135,6 +131,39 @@ async function loadAvatarModel(data) {
   frameAvatar(object);
 }
 
+async function loadOfficialPreview(url) {
+  if (!url) throw new Error('O Roblox não retornou a imagem oficial do avatar.');
+
+  const texture = await new THREE.TextureLoader().loadAsync(url);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const group = new THREE.Group();
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.45, 3.45),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide })
+  );
+  plane.position.y = 1.72;
+  group.add(plane);
+
+  const pedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.4, 1.65, 0.16, 48),
+    new THREE.MeshStandardMaterial({ color: 0x18241c, roughness: 0.75, metalness: 0.15 })
+  );
+  pedestal.position.y = 0.08;
+  group.add(pedestal);
+
+  clearAvatar();
+  avatarRoot = group;
+  scene.add(group);
+
+  camera.position.set(0, 2.1, 6.2);
+  controls.target.set(0, 1.75, 0);
+  controls.minDistance = 3.8;
+  controls.maxDistance = 10;
+  controls.update();
+}
+
 async function fetchAvatar(username, retry = 0) {
   const response = await fetch(`/api/avatar?username=${encodeURIComponent(username)}`);
   const data = await response.json().catch(() => ({}));
@@ -155,13 +184,15 @@ form.addEventListener('submit', async (event) => {
   if (!username) return;
 
   setLoading(true);
-  setStatus('Buscando usuário e montando o avatar 3D…');
+  setStatus('Buscando usuário, aparência e itens equipados…');
 
   try {
     const data = await fetchAvatar(username);
 
     displayNameEl.textContent = data.user.displayName || data.user.name;
-    accountNameEl.textContent = `@${data.user.name} · ID ${data.user.id}`;
+    const itemCount = Array.isArray(data.wearing) ? data.wearing.length : 0;
+    accountNameEl.textContent = `@${data.user.name} · ID ${data.user.id} · ${itemCount} itens equipados`;
+
     if (data.previewUrl) {
       previewEl.src = data.previewUrl;
       previewEl.hidden = false;
@@ -170,8 +201,13 @@ form.addEventListener('submit', async (event) => {
     }
     userCard.hidden = false;
 
-    await loadAvatarModel(data);
-    setStatus('Avatar 3D carregado. Você pode girar e aproximar o boneco.');
+    if (data.mode === '3d' && data.obj && data.mtl) {
+      await loadAvatarModel(data);
+      setStatus('Avatar 3D carregado com a aparência atual do Roblox.');
+    } else {
+      await loadOfficialPreview(data.previewUrl);
+      setStatus('Aparência atual carregada pela API pública do Roblox. O endpoint 3D Beta está indisponível sem autenticação compatível.');
+    }
   } catch (error) {
     console.error(error);
     setStatus(error.message || 'Não foi possível carregar o avatar.', true);
