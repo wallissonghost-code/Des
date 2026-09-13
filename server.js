@@ -39,6 +39,7 @@ async function resolveUsername(username) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
   });
+
   const user = payload?.data?.[0];
   if (!user) {
     const error = new Error('Usuário Roblox não encontrado');
@@ -48,20 +49,28 @@ async function resolveUsername(username) {
   return user;
 }
 
+async function fetchAvatarDefinition(userId) {
+  try {
+    return await fetchJson(`https://avatar.roblox.com/v4/avatar/users/${encodeURIComponent(userId)}`);
+  } catch {
+    return fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(userId)}/avatar`);
+  }
+}
+
+async function fetchCurrentlyWearing(userId) {
+  try {
+    const data = await fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(userId)}/currently-wearing`);
+    return Array.isArray(data?.assetIds) ? data.assetIds : [];
+  } catch {
+    return [];
+  }
+}
+
 async function fetch3DDescriptor(userId) {
   const url = `https://thumbnails.roblox.com/v1/users/avatar-3d?userId=${encodeURIComponent(userId)}&useGltf=false`;
   const headers = { accept: 'application/json' };
   if (ROBLOX_API_KEY) headers['x-api-key'] = ROBLOX_API_KEY;
-
-  try {
-    return await fetchJson(url, { headers });
-  } catch (error) {
-    // Compatibility fallback. Roblox has changed auth requirements for this Beta endpoint over time.
-    if (![401, 403].includes(error.status)) throw error;
-    return await fetchJson(`https://www.roblox.com/avatar-thumbnail-3d/json?userId=${encodeURIComponent(userId)}`, {
-      headers: { accept: 'application/json' }
-    });
-  }
+  return fetchJson(url, { headers });
 }
 
 async function getFullBodyPreview(userId) {
@@ -81,40 +90,54 @@ app.get('/api/avatar', async (req, res) => {
     }
 
     const user = await resolveUsername(username);
-    const [descriptor, previewUrl] = await Promise.all([
-      fetch3DDescriptor(user.id),
+    const [avatarDefinition, wearing, previewUrl] = await Promise.all([
+      fetchAvatarDefinition(user.id),
+      fetchCurrentlyWearing(user.id),
       getFullBodyPreview(user.id)
     ]);
 
-    const state = descriptor?.state || descriptor?.data?.[0]?.state;
-    const imageUrl = descriptor?.imageUrl || descriptor?.data?.[0]?.imageUrl;
-    if (state && state !== 'Completed') {
-      return res.status(202).json({ error: `Avatar 3D ainda está sendo gerado (${state}).`, state, user, previewUrl });
-    }
-    if (!imageUrl) {
-      return res.status(502).json({ error: 'Roblox não retornou o objeto 3D do avatar.', user, previewUrl });
-    }
-
-    const model = await fetchJson(imageUrl, { headers: { accept: 'application/json' } });
-    if (!model?.obj || !model?.mtl) {
-      return res.status(502).json({ error: 'O descritor 3D retornado pelo Roblox está incompleto.', user, previewUrl });
-    }
-
-    res.json({
+    const base = {
       user: { id: user.id, name: user.name, displayName: user.displayName },
       previewUrl,
-      camera: model.camera || null,
-      aabb: model.aabb || null,
-      obj: model.obj,
-      mtl: model.mtl,
-      textures: Array.isArray(model.textures) ? model.textures : []
-    });
+      avatar: avatarDefinition,
+      wearing,
+      mode: 'official-preview'
+    };
+
+    try {
+      const descriptor = await fetch3DDescriptor(user.id);
+      const state = descriptor?.state || descriptor?.data?.[0]?.state;
+      const imageUrl = descriptor?.imageUrl || descriptor?.data?.[0]?.imageUrl;
+
+      if (state && state !== 'Completed') {
+        return res.status(202).json({ ...base, state, error: `Avatar 3D ainda está sendo gerado (${state}).` });
+      }
+
+      if (imageUrl) {
+        const model = await fetchJson(imageUrl, { headers: { accept: 'application/json' } });
+        if (model?.obj && model?.mtl) {
+          return res.json({
+            ...base,
+            mode: '3d',
+            camera: model.camera || null,
+            aabb: model.aabb || null,
+            obj: model.obj,
+            mtl: model.mtl,
+            textures: Array.isArray(model.textures) ? model.textures : []
+          });
+        }
+      }
+    } catch (error) {
+      // The Roblox avatar-3d route is Beta and may reject server requests without
+      // an authentication method exposed to this application. The public avatar
+      // definition and official thumbnail remain usable, so we degrade gracefully.
+      console.warn('avatar-3d unavailable, using public avatar definition fallback:', error.status || error.message);
+    }
+
+    return res.json(base);
   } catch (error) {
     console.error(error);
-    const authHint = [401, 403].includes(error.status)
-      ? ' O endpoint 3D do Roblox pode exigir ROBLOX_API_KEY neste ambiente.'
-      : '';
-    res.status(error.status || 500).json({ error: `${error.message || 'Falha ao carregar avatar.'}${authHint}` });
+    res.status(error.status || 500).json({ error: error.message || 'Falha ao carregar avatar.' });
   }
 });
 
@@ -138,4 +161,4 @@ app.get('/api/cdn/:hash', async (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`DES Roblox Avatar 3D running on :${PORT}`));
+app.listen(PORT, () => console.log(`DES Roblox Avatar running on :${PORT}`));
