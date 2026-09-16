@@ -2,163 +2,25 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+const app=express();
+const PORT=process.env.PORT||3000;
+const __filename=fileURLToPath(import.meta.url),__dirname=path.dirname(__filename);
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname,'public')));
 
-const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY || '';
+async function fetchJson(url,options={}){const r=await fetch(url,options),text=await r.text();let data;try{data=JSON.parse(text)}catch{data=null}if(!r.ok){const e=new Error(`Roblox request failed (${r.status})`);e.status=r.status;e.body=data??text;throw e}return data}
+async function resolveUsername(username){const p=await fetchJson('https://users.roblox.com/v1/usernames/users',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({usernames:[username],excludeBannedUsers:false})});const u=p?.data?.[0];if(!u){const e=new Error('Usuário Roblox não encontrado');e.status=404;throw e}return u}
+async function fetchAvatarDefinition(id){try{return await fetchJson(`https://avatar.roblox.com/v4/avatar/users/${encodeURIComponent(id)}`)}catch{return fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(id)}/avatar`)}}
+async function fetchCurrentlyWearing(id){try{const d=await fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(id)}/currently-wearing`);return Array.isArray(d?.assetIds)?d.assetIds:[]}catch{return[]}}
+async function getFullBodyPreview(id){try{const d=await fetchJson(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${id}&size=420x420&format=Png&isCircular=false`);return d?.data?.[0]?.imageUrl||null}catch{return null}}
 
-function cdnUrl(hash) {
-  if (!/^[A-Za-z0-9-]{16,128}$/.test(hash)) throw new Error('Invalid CDN hash');
-  let shard = 31;
-  for (const char of hash) shard ^= char.charCodeAt(0);
-  return `https://t${shard % 8}.rbxcdn.com/${hash}`;
-}
+function assetIdsFromAvatar(avatar,wearing){const ids=new Set((wearing||[]).map(Number).filter(Number.isSafeInteger));for(const a of avatar?.assets||[]){const id=Number(a?.id);if(Number.isSafeInteger(id))ids.add(id)}return [...ids]}
+async function inspectAsset(assetId){try{const r=await fetch(`https://assetdelivery.roblox.com/v2/assetId/${encodeURIComponent(assetId)}`,{headers:{accept:'application/json'}});const text=await r.text();let data=null;try{data=JSON.parse(text)}catch{};return {assetId,status:r.status,ok:r.ok,contentType:r.headers.get('content-type'),location:r.headers.get('location'),data:data&&typeof data==='object'?data:null,sample:data?null:text.slice(0,160)}}catch(e){return {assetId,ok:false,error:e.message}}}
 
-async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = null; }
-  if (!response.ok) {
-    const error = new Error(`Roblox request failed (${response.status})`);
-    error.status = response.status;
-    error.body = data ?? text;
-    throw error;
-  }
-  return data;
-}
+app.get('/api/avatar',async(req,res)=>{try{const username=String(req.query.username||'').trim();if(!/^[A-Za-z0-9_]{3,20}$/.test(username))return res.status(400).json({error:'Digite um username Roblox válido.'});const user=await resolveUsername(username);const [avatar,wearing,previewUrl]=await Promise.all([fetchAvatarDefinition(user.id),fetchCurrentlyWearing(user.id),getFullBodyPreview(user.id)]);return res.json({user:{id:user.id,name:user.name,displayName:user.displayName},previewUrl,avatar,wearing,assetIds:assetIdsFromAvatar(avatar,wearing),mode:'asset-reconstruction'})}catch(e){console.error(e);res.status(e.status||500).json({error:e.message||'Falha ao carregar avatar.'})}});
 
-async function resolveUsername(username) {
-  const payload = await fetchJson('https://users.roblox.com/v1/usernames/users', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
-  });
+app.get('/api/avatar-assets',async(req,res)=>{try{const username=String(req.query.username||'').trim();if(!/^[A-Za-z0-9_]{3,20}$/.test(username))return res.status(400).json({error:'Username inválido.'});const user=await resolveUsername(username);const [avatar,wearing]=await Promise.all([fetchAvatarDefinition(user.id),fetchCurrentlyWearing(user.id)]);const ids=assetIdsFromAvatar(avatar,wearing);const results=[];for(let i=0;i<ids.length;i+=5){results.push(...await Promise.all(ids.slice(i,i+5).map(inspectAsset)))}res.json({user:{id:user.id,name:user.name},count:ids.length,assets:results})}catch(e){console.error(e);res.status(e.status||500).json({error:e.message||'Falha ao inspecionar assets.'})}});
 
-  const user = payload?.data?.[0];
-  if (!user) {
-    const error = new Error('Usuário Roblox não encontrado');
-    error.status = 404;
-    throw error;
-  }
-  return user;
-}
-
-async function fetchAvatarDefinition(userId) {
-  try {
-    return await fetchJson(`https://avatar.roblox.com/v4/avatar/users/${encodeURIComponent(userId)}`);
-  } catch {
-    return fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(userId)}/avatar`);
-  }
-}
-
-async function fetchCurrentlyWearing(userId) {
-  try {
-    const data = await fetchJson(`https://avatar.roblox.com/v1/users/${encodeURIComponent(userId)}/currently-wearing`);
-    return Array.isArray(data?.assetIds) ? data.assetIds : [];
-  } catch {
-    return [];
-  }
-}
-
-async function fetch3DDescriptor(userId) {
-  const url = `https://thumbnails.roblox.com/v1/users/avatar-3d?userId=${encodeURIComponent(userId)}&useGltf=false`;
-  const headers = { accept: 'application/json' };
-  if (ROBLOX_API_KEY) headers['x-api-key'] = ROBLOX_API_KEY;
-  return fetchJson(url, { headers });
-}
-
-async function getFullBodyPreview(userId) {
-  try {
-    const data = await fetchJson(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`);
-    return data?.data?.[0]?.imageUrl || null;
-  } catch {
-    return null;
-  }
-}
-
-app.get('/api/avatar', async (req, res) => {
-  try {
-    const username = String(req.query.username || '').trim();
-    if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
-      return res.status(400).json({ error: 'Digite um username Roblox válido.' });
-    }
-
-    const user = await resolveUsername(username);
-    const [avatarDefinition, wearing, previewUrl] = await Promise.all([
-      fetchAvatarDefinition(user.id),
-      fetchCurrentlyWearing(user.id),
-      getFullBodyPreview(user.id)
-    ]);
-
-    const base = {
-      user: { id: user.id, name: user.name, displayName: user.displayName },
-      previewUrl,
-      avatar: avatarDefinition,
-      wearing,
-      mode: 'official-preview'
-    };
-
-    try {
-      const descriptor = await fetch3DDescriptor(user.id);
-      const state = descriptor?.state || descriptor?.data?.[0]?.state;
-      const imageUrl = descriptor?.imageUrl || descriptor?.data?.[0]?.imageUrl;
-
-      if (state && state !== 'Completed') {
-        return res.status(202).json({ ...base, state, error: `Avatar 3D ainda está sendo gerado (${state}).` });
-      }
-
-      if (imageUrl) {
-        const model = await fetchJson(imageUrl, { headers: { accept: 'application/json' } });
-        if (model?.obj && model?.mtl) {
-          return res.json({
-            ...base,
-            mode: '3d',
-            camera: model.camera || null,
-            aabb: model.aabb || null,
-            obj: model.obj,
-            mtl: model.mtl,
-            textures: Array.isArray(model.textures) ? model.textures : []
-          });
-        }
-      }
-    } catch (error) {
-      // The Roblox avatar-3d route is Beta and may reject server requests without
-      // an authentication method exposed to this application. The public avatar
-      // definition and official thumbnail remain usable, so we degrade gracefully.
-      console.warn('avatar-3d unavailable, using public avatar definition fallback:', error.status || error.message);
-    }
-
-    return res.json(base);
-  } catch (error) {
-    console.error(error);
-    res.status(error.status || 500).json({ error: error.message || 'Falha ao carregar avatar.' });
-  }
-});
-
-app.get('/api/cdn/:hash', async (req, res) => {
-  try {
-    const url = cdnUrl(req.params.hash);
-    const upstream = await fetch(url);
-    if (!upstream.ok) return res.status(upstream.status).send('CDN asset unavailable');
-    const contentType = upstream.headers.get('content-type');
-    const contentLength = upstream.headers.get('content-length');
-    if (contentType) res.setHeader('content-type', contentType);
-    if (contentLength) res.setHeader('content-length', contentLength);
-    res.setHeader('cache-control', 'public, max-age=3600');
-    const bytes = Buffer.from(await upstream.arrayBuffer());
-    res.send(bytes);
-  } catch (error) {
-    console.error(error);
-    res.status(400).send('Invalid CDN request');
-  }
-});
-
-app.get('/health', (_req, res) => res.json({ ok: true }));
-
-app.listen(PORT, () => console.log(`DES Roblox Avatar running on :${PORT}`));
+app.get('/api/asset/:id',async(req,res)=>{const id=Number(req.params.id);if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'Asset ID inválido.'});const info=await inspectAsset(id);res.status(info.ok?200:502).json(info)});
+app.get('/health',(_req,res)=>res.json({ok:true,mode:'real-avatar-asset-reconstruction'}));
+app.listen(PORT,()=>console.log(`DES Roblox real avatar asset inspector running on :${PORT}`));
